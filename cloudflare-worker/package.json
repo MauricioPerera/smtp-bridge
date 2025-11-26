@@ -1,0 +1,17 @@
+{
+  "name": "cloudflare-email-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for sending emails via Email Routing",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "mimetext": "^3.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

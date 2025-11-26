@@ -1,0 +1,25 @@
+# Cloudflare Worker Configuration
+# Copy this file to wrangler.toml and update the values
+
+name = "email-sender"
+main = "worker.js"
+compatibility_date = "2024-11-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Your Cloudflare Account ID
+# Find it at: https://dash.cloudflare.com -> Select domain -> Overview (right sidebar)
+account_id = "YOUR_ACCOUNT_ID"
+
+# Email binding for sending emails
+# The destination_address must be a verified email in Cloudflare Email Routing
+send_email = [
+    { name = "EMAIL", destination_address = "your-verified-email@gmail.com" }
+]
+
+# Environment variables (non-sensitive)
+[vars]
+SENDER_EMAIL = "noreply@yourdomain.com"
+DEFAULT_FROM_NAME = "Your App Name"
+
+# Note: API_KEY should be set as a secret using:
+# wrangler secret put API_KEY

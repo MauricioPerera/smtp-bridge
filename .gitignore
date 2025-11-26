@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment files (contain secrets)
+.env
+.env.local
+cloudflare-worker/.env
+
+# Wrangler
+.wrangler/
+cloudflare-worker/.wrangler/
+cloudflare-worker/wrangler.toml
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build outputs
+dist/
+build/

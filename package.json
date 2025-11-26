@@ -1,0 +1,29 @@
+{
+  "name": "smtp-to-webhook",
+  "version": "1.0.0",
+  "description": "SMTP server that forwards emails to a Cloudflare Worker webhook",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scripts/test-smtp.js"
+  },
+  "keywords": [
+    "smtp",
+    "cloudflare",
+    "email",
+    "webhook",
+    "bridge"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "mailparser": "^3.9.0",
+    "smtp-server": "^3.16.1"
+  },
+  "devDependencies": {
+    "nodemailer": "^7.0.11"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
