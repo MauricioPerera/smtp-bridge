@@ -1,6 +1,6 @@
 {
   "name": "smtp-to-webhook",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "SMTP server that forwards emails to a Cloudflare Worker webhook",
   "main": "server.js",
   "scripts": {
@@ -19,6 +19,9 @@
   "dependencies": {
     "mailparser": "^3.9.0",
     "smtp-server": "^3.16.1"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
     "nodemailer": "^7.0.11"

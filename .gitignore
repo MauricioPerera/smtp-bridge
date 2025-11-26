@@ -11,6 +11,12 @@ cloudflare-worker/.env
 cloudflare-worker/.wrangler/
 cloudflare-worker/wrangler.toml
 
+# SQLite database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Logs
 *.log
 npm-debug.log*

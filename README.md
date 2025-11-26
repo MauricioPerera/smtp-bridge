@@ -9,19 +9,23 @@ A lightweight SMTP server that forwards emails to a Cloudflare Worker, enabling 
 │  Your App   │ ──────────────► │ SMTP Bridge  │ ──────────────► │ Cloudflare      │
 │  (n8n, etc) │   Port 2525     │  (Node.js)   │    Webhook      │ Email Worker    │
 └─────────────┘                 └──────────────┘                 └────────┬────────┘
-                                                                          │
-                                                                          ▼
-                                                                 ┌─────────────────┐
-                                                                 │ Email Recipient │
-                                                                 └─────────────────┘
+                                       │                                  │
+                                       ▼                                  ▼
+                              ┌─────────────────┐                ┌─────────────────┐
+                              │  Health Check   │                │ Email Recipient │
+                              │  :2526/health   │                └─────────────────┘
+                              └─────────────────┘
 ```
 
 ## Features
 
 - **100% Cloudflare** - No external email providers needed
-- **Free** - Uses Cloudflare's free tier
-- **Simple** - Drop-in SMTP replacement for apps that require SMTP
-- **Secure** - API key authentication between bridge and worker
+- **Free** - Uses Cloudflare's free tier (200 emails/day)
+- **Rate Limiting** - Built-in protection against quota exhaustion
+- **Queue & Retries** - SQLite-backed queue with automatic retries
+- **Multiple Recipients** - Full TO/CC/BCC support
+- **Attachments** - Base64-encoded file attachments
+- **Health Checks** - HTTP endpoints for monitoring
 - **Docker-friendly** - Works with containerized applications
 
 ## Quick Start
@@ -86,30 +90,20 @@ Point your application's SMTP settings to the bridge:
 | SSL/TLS | `false` |
 | Authentication | None required |
 
-## Project Structure
+---
 
-```
-smtp-to-webhook/
-├── server.js                 # SMTP bridge server
-├── package.json
-├── .env.example              # Configuration template
-├── .env                      # Your configuration (create this)
-│
-├── cloudflare-worker/        # Cloudflare Worker for email sending
-│   ├── worker.js             # Worker code
-│   ├── wrangler.toml.example # Wrangler config template
-│   └── package.json
-│
-├── scripts/
-│   ├── install.sh            # Systemd service installer
-│   ├── setup-cloudflare.sh   # Cloudflare Worker setup helper
-│   └── test-smtp.js          # Test script
-│
-└── docs/
-    ├── CLOUDFLARE_SETUP.md   # Detailed Cloudflare setup guide
-    ├── N8N_INTEGRATION.md    # n8n integration guide
-    └── DOCKER.md             # Docker usage guide
-```
+## Cloudflare Free Tier Limits
+
+| Resource | Limit |
+|----------|-------|
+| Emails per day | **200** |
+| Email size | **25 MB** |
+| Recipients per email | 1 (bridge sends individually) |
+| Workers requests | 100,000/day |
+
+The bridge includes a built-in rate limiter (default: 200/day) to prevent exceeding Cloudflare's free tier. Adjust `RATE_LIMIT_PER_DAY` if you have a paid plan.
+
+---
 
 ## Configuration
 
@@ -119,9 +113,15 @@ smtp-to-webhook/
 |----------|----------|---------|-------------|
 | `WEBHOOK_URL` | Yes | - | Cloudflare Worker URL |
 | `WEBHOOK_API_KEY` | Yes | - | API key for authentication |
-| `SMTP_PORT` | No | `2525` | Port to listen on |
-| `SMTP_HOST` | No | `127.0.0.1` | Host to bind to (`0.0.0.0` for Docker) |
+| `SMTP_PORT` | No | `2525` | SMTP port to listen on |
+| `SMTP_HOST` | No | `127.0.0.1` | Host to bind (`0.0.0.0` for Docker) |
 | `DEFAULT_FROM_NAME` | No | `System` | Default sender name |
+| `RATE_LIMIT_PER_DAY` | No | `200` | Max emails per day |
+| `ENABLE_QUEUE` | No | `true` | Enable SQLite queue |
+| `MAX_RETRIES` | No | `3` | Retry attempts for failed emails |
+| `RETRY_DELAY_MS` | No | `60000` | Delay between retries (ms) |
+| `HEALTH_PORT` | No | `2526` | Health check HTTP port |
+| `MAX_ATTACHMENT_SIZE` | No | `26214400` | Max attachment size (bytes) |
 
 ### Cloudflare Worker (wrangler.toml)
 
@@ -132,27 +132,150 @@ smtp-to-webhook/
 | `vars.SENDER_EMAIL` | From address (must be on your domain) |
 | `vars.DEFAULT_FROM_NAME` | Default sender name |
 
-## Requirements
+---
 
-### Prerequisites
+## Health Check Endpoints
 
-- Node.js 18+
-- npm
-- Domain with Cloudflare DNS
-- Cloudflare Email Routing enabled
+The bridge exposes HTTP endpoints for monitoring on port 2526 (configurable):
 
-### Cloudflare Setup
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Full health status with stats |
+| `GET /stats` | Rate limit and queue statistics |
+| `GET /ready` | Kubernetes readiness probe |
+| `GET /live` | Kubernetes liveness probe |
 
-1. Add your domain to Cloudflare
-2. Enable Email Routing: Dashboard → Email → Email Routing
-3. Add a destination address and verify it
-4. Cloudflare automatically creates MX and SPF records
+### Example Response
+
+```bash
+curl http://localhost:2526/health
+```
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-11-26T10:30:00.000Z",
+  "uptime": 3600,
+  "smtp": {
+    "host": "0.0.0.0",
+    "port": 2525
+  },
+  "rateLimit": {
+    "used": 45,
+    "limit": 200,
+    "remaining": 155,
+    "resetAt": "2024-11-27T00:00:00.000Z"
+  },
+  "queue": {
+    "enabled": true,
+    "total": 50,
+    "pending": 2,
+    "sent": 45,
+    "failed": 3
+  }
+}
+```
+
+---
+
+## Queue & Retries
+
+When `ENABLE_QUEUE=true` (default), emails are:
+
+1. Immediately accepted by SMTP
+2. Stored in SQLite database
+3. Processed in background
+4. Automatically retried on failure
+
+Benefits:
+- Fast SMTP responses (no blocking)
+- Resilience to Worker downtime
+- Automatic retries for transient failures
+- Persistent queue survives restarts
+
+To disable: `ENABLE_QUEUE=false`
+
+**Note:** Requires `better-sqlite3` (optional dependency). Without it, emails are sent immediately without queue/retry.
+
+---
+
+## Attachments
+
+The bridge supports file attachments:
+
+```javascript
+// Nodemailer example with attachment
+await transporter.sendMail({
+  from: 'app@yourdomain.com',
+  to: 'user@example.com',
+  subject: 'Report',
+  text: 'Please find attached.',
+  attachments: [{
+    filename: 'report.pdf',
+    path: './report.pdf'
+  }]
+});
+```
+
+**Limitations:**
+- Max size: 25 MB total (Cloudflare limit)
+- Attachments are base64 encoded (33% size increase)
+- Large attachments count against rate limits
+
+---
+
+## Multiple Recipients (TO/CC/BCC)
+
+All recipient types are supported:
+
+```javascript
+await transporter.sendMail({
+  from: 'app@yourdomain.com',
+  to: ['user1@example.com', 'user2@example.com'],
+  cc: 'manager@example.com',
+  bcc: 'archive@example.com',
+  subject: 'Team Update',
+  text: 'Hello team!'
+});
+```
+
+**Note:** Due to Cloudflare Email Routing limitations, each recipient receives an individual email. For 3 TO + 1 CC + 1 BCC, this counts as 5 emails against your daily limit.
+
+---
+
+## Project Structure
+
+```
+smtp-to-webhook/
+├── server.js                 # SMTP bridge server
+├── package.json
+├── .env.example              # Configuration template
+├── email_queue.db            # SQLite queue (auto-created)
+│
+├── cloudflare-worker/        # Cloudflare Worker
+│   ├── worker.js             # Worker code
+│   ├── wrangler.toml.example # Wrangler config template
+│   └── package.json
+│
+├── scripts/
+│   ├── install.sh            # Systemd service installer
+│   ├── setup-cloudflare.sh   # Cloudflare Worker setup
+│   └── test-smtp.js          # Test script
+│
+└── docs/
+    ├── CLOUDFLARE_SETUP.md   # Detailed Cloudflare setup
+    └── integrations/         # App integration guides
+        ├── N8N.md
+        ├── WORDPRESS.md
+        ├── LARAVEL.md
+        ├── DJANGO.md
+        ├── NEXTCLOUD.md
+        └── GITLAB.md
+```
+
+---
 
 ## API
-
-### SMTP Bridge
-
-The bridge accepts standard SMTP connections on the configured port. No authentication required for local connections.
 
 ### Cloudflare Worker
 
@@ -162,11 +285,21 @@ Content-Type: application/json
 X-API-Key: your-api-key
 
 {
-  "to": "recipient@example.com",
+  "to": ["recipient@example.com"],
+  "cc": ["copy@example.com"],
+  "bcc": ["blind@example.com"],
   "subject": "Email subject",
   "text": "Plain text body",
   "html": "<p>HTML body</p>",
-  "from_name": "Sender Name"
+  "from_name": "Sender Name",
+  "attachments": [{
+    "filename": "file.pdf",
+    "contentType": "application/pdf",
+    "content": "base64-encoded-content"
+  }],
+  "headers": {
+    "replyTo": "reply@example.com"
+  }
 }
 ```
 
@@ -174,17 +307,21 @@ Response:
 ```json
 {
   "success": true,
-  "message": "Email sent successfully",
-  "to": "recipient@example.com",
+  "message": "Email sent to 3 recipient(s)",
+  "recipients": [
+    { "email": "recipient@example.com", "type": "to", "status": "sent" },
+    { "email": "copy@example.com", "type": "cc", "status": "sent" },
+    { "email": "blind@example.com", "type": "bcc", "status": "sent" }
+  ],
   "subject": "Email subject"
 }
 ```
 
+---
+
 ## Usage Examples
 
 ### n8n Integration
-
-Add to your n8n `docker-compose.yml`:
 
 ```yaml
 services:
@@ -214,7 +351,11 @@ await transporter.sendMail({
   from: 'app@yourdomain.com',
   to: 'user@example.com',
   subject: 'Hello',
-  text: 'Hello World!'
+  text: 'Hello World!',
+  attachments: [{
+    filename: 'report.pdf',
+    path: './report.pdf'
+  }]
 });
 ```
 
@@ -227,6 +368,7 @@ from email.message import EmailMessage
 msg = EmailMessage()
 msg['From'] = 'app@yourdomain.com'
 msg['To'] = 'user@example.com'
+msg['Cc'] = 'manager@example.com'
 msg['Subject'] = 'Hello'
 msg.set_content('Hello World!')
 
@@ -234,14 +376,7 @@ with smtplib.SMTP('127.0.0.1', 2525) as server:
     server.send_message(msg)
 ```
 
-### cURL (direct to Worker)
-
-```bash
-curl -X POST "https://your-worker.workers.dev" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{"to": "user@example.com", "subject": "Hello", "text": "Hello World!"}'
-```
+---
 
 ## Testing
 
@@ -249,24 +384,38 @@ curl -X POST "https://your-worker.workers.dev" \
 # Test the SMTP bridge
 npm test your-email@example.com
 
-# Or manually
-node scripts/test-smtp.js your-email@example.com
+# Check health status
+curl http://localhost:2526/health
+
+# Check rate limit status
+curl http://localhost:2526/stats
 ```
+
+---
 
 ## Troubleshooting
 
+### Rate Limit Exceeded
+
+```
+Error: Rate limit exceeded. Resets at 2024-11-27T00:00:00.000Z
+```
+
+- Check current usage: `curl http://localhost:2526/stats`
+- Wait for reset at midnight UTC
+- Or upgrade Cloudflare plan and increase `RATE_LIMIT_PER_DAY`
+
 ### Connection Refused
 
-If you see `ECONNREFUSED`:
 - Ensure the bridge is running: `systemctl status smtp-bridge`
-- Check if binding to correct host (use `0.0.0.0` for Docker)
-- Verify the port is open: `nc -zv localhost 2525`
+- Check host binding (use `0.0.0.0` for Docker)
+- Verify port: `nc -zv localhost 2525`
 
-### Emails Not Sending
+### Queue Not Working
 
-- Check bridge logs: `journalctl -u smtp-bridge -f`
-- Verify Cloudflare Worker is deployed: `wrangler tail`
-- Ensure API key matches in both .env and Worker secret
+- Install optional dependency: `npm install better-sqlite3`
+- Check if queue is enabled: `curl http://localhost:2526/health`
+- View pending emails in `email_queue.db`
 
 ### Emails Going to Spam
 
@@ -274,25 +423,46 @@ If you see `ECONNREFUSED`:
 - Add DMARC record: `v=DMARC1; p=quarantine`
 - Use consistent sender address
 
+---
+
 ## Security Considerations
 
 - The SMTP bridge has no authentication by default
 - Only bind to `127.0.0.1` unless Docker requires `0.0.0.0`
-- Use firewall rules to restrict access to port 2525
+- Use firewall rules to restrict access to ports 2525 and 2526
 - Keep API keys secure and rotate regularly
+
+---
+
+## Known Limitations
+
+1. **200 emails/day on free tier** - Each recipient counts separately
+2. **No DKIM signing** - Cloudflare Email Routing handles authentication
+3. **No email tracking** - Opens/clicks not tracked
+4. **Sequential recipient delivery** - CC/BCC recipients get individual emails
+5. **25 MB max email size** - Including base64-encoded attachments
+
+---
+
+## Requirements
+
+- Node.js 18+
+- npm
+- Domain with Cloudflare DNS
+- Cloudflare Email Routing enabled
+- (Optional) better-sqlite3 for queue functionality
+
+---
 
 ## License
 
 MIT
 
-## Contributing
-
-Pull requests welcome! Please read the contributing guidelines first.
-
 ## Credits
 
 Built with:
-- [smtp-server](https://nodemailer.com/extras/smtp-server/) - SMTP server implementation
+- [smtp-server](https://nodemailer.com/extras/smtp-server/) - SMTP server
 - [mailparser](https://nodemailer.com/extras/mailparser/) - Email parsing
+- [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) - Queue storage
 - [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless execution
 - [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/) - Email infrastructure
